@@ -1,11 +1,14 @@
 import ast
+import base64
 import json
 import os
 import re
-import git
-import requests
 import shutil
 import xml.etree.ElementTree as ET
+
+import requests
+from pip._internal.vcs import git
+import xml.dom.minidom as md
 
 
 def get_env_variable(name):
@@ -15,36 +18,61 @@ def get_env_variable(name):
     return value
 
 
-def updateLog4j2FileContent(log4j_path):
-    xmlTree = ET.parse(log4j_path)
-    xmlRoot = xmlTree.getroot()
+def updateLog4jFileContent(log4j_path):
+    with open(log4j_path, "r", encoding="UTF-8") as file:
+        xml_data = file.read()
+
+    dom = md.parseString(xml_data)
+
+    properties_element = dom.getElementsByTagName("Properties")
+    if len(properties_element) == 0:
+        properties_element = dom.createElement("Properties")
+        dom.documentElement.appendChild(properties_element)
+    else:
+        properties_element = properties_element[0]
+
     default_pattern_layout_element = None
+    for property_element in properties_element.getElementsByTagName("Property"):
+        if property_element.getAttribute("name") == "defaultPatternLayout":
+            default_pattern_layout_element = property_element
+            break
 
-    properties_element = xmlRoot.find("Properties")
+    if default_pattern_layout_element is not None:
+        default_pattern_layout_element.firstChild.nodeValue = CUSTOM_MESSAGE
+    else:
+        new_property_element = dom.createElement("Property")
+        new_property_element.setAttribute("name", "defaultPatternLayout")
+        new_property_element.appendChild(dom.createTextNode(CUSTOM_MESSAGE))
+        properties_element.appendChild(new_property_element)
 
-    with open(log4j_path, "r+") as file:
-        if properties_element is not None:
-            default_pattern_layout_element = properties_element.find(
-                "Property[@name='defaultPatternLayout']")
+    # Get the root element and find <PatternLayout> elements directly under it
+    root_element = dom.documentElement
+    pattern_layout_elements = root_element.getElementsByTagName(
+        "PatternLayout")
 
-        if default_pattern_layout_element is not None:
-            default_pattern_layout_element.text = CUSTOM_MESSAGE
-        else:
-            properties_element = ET.Element("Properties")
-            new_property_element = ET.Element(
-                "Property", name="defaultPatternLayout")
-            new_property_element.text = CUSTOM_MESSAGE
-            properties_element.append(new_property_element)
+    for pattern_layout_element in pattern_layout_elements:
+        # Check if the <PatternLayout> element is directly under the root element
+        if pattern_layout_element.parentNode == root_element:
+            # Remove the existing <Property> element inside <PatternLayout>
+            for child_element in pattern_layout_element.childNodes[:]:
+                if child_element.nodeType == child_element.ELEMENT_NODE and child_element.tagName == "Property":
+                    pattern_layout_element.removeChild(child_element)
 
-        pattern_layout_elements = xmlRoot.findall(".//PatternLayout")
-        for pattern_layout_element in pattern_layout_elements:
-            pattern_layout_element.set("pattern", "${defaultPatternLayout}")
+            pattern_layout_element.setAttribute(
+                "pattern", "${defaultPatternLayout}")
 
-        updated_log4j2_content = ET.tostring(xmlRoot, encoding="unicode")
+    # Get the XML content as a string with the UTF-8 encoding declaration
+    xml_content = dom.toxml()
 
-        file.seek(0)
-        file.write(updated_log4j2_content)
-        file.truncate()
+    # Remove any existing XML version declarations from the xml_content
+    xml_content_without_version = re.sub(r'<\?xml[^>]*\?>', '', xml_content)
+
+    # Add the encoding declaration to the xml_content string
+    xml_content_with_encoding = f'<?xml version="1.0" encoding="UTF-8"?>\n{xml_content_without_version}'
+
+    # Write the string content to the file
+    with open(log4j_path, "w", encoding="UTF-8") as file:
+        file.write(xml_content_with_encoding)
 
 
 def update_log4j_config(projectId, repo_path, repo_name):
@@ -55,7 +83,7 @@ def update_log4j_config(projectId, repo_path, repo_name):
     for log4j_file in log4j_files:
         print(f"Updating {log4j_file} ....")
         log4j_path = os.path.join(repo_path, log4j_file)
-        updateLog4j2FileContent(log4j_path)
+        updateLog4jFileContent(log4j_path)
 
         # Commit changes
         repo.index.add([log4j_path])

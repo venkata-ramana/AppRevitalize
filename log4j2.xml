@@ -1,0 +1,198 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Configuration status="INFO">
+
+    <Properties>
+        <Property name="defaultPatternLayout">
+            [%d{ISO8601_OFFSET_DATE_TIME_HHCMM}][%X{X-Unique-ID}][trace.id=%equals{%X{trace.id}}{}{%X{trace_id}}][span.id=%X{span_id}][tx.id=%X{transaction.id}][%p] %c{3} - %m%n
+        </Property>
+        <Property name="logging-kafkaBootstrapServers">
+            b-2.vi-prod-logging-01.zahm16.c1.kafka.us-east-1.amazonaws.com:9094,b-1.vi-prod-logging-01.zahm16.c1.kafka.us-east-1.amazonaws.com:9094,b-3.vi-prod-logging-01.zahm16.c1.kafka.us-east-1.amazonaws.com:9094
+        </Property>
+        <Property name="int-kafkaBootstrapServers">
+            b-2.vi-int-applicatio.vk2t93.c4.kafka.ap-southeast-2.amazonaws.com:9094,b-1.vi-int-applicatio.vk2t93.c4.kafka.ap-southeast-2.amazonaws.com:9094
+        </Property>
+        <Property name="ninjas-kafkaBootstrapServers">
+            b-1.vi-ninjas-applica.ptl8wx.c4.kafka.ap-southeast-2.amazonaws.com:9094,b-2.vi-ninjas-applica.ptl8wx.c4.kafka.ap-southeast-2.amazonaws.com:9094
+        </Property>
+        <Property name="starfox-kafkaBootstrapServers">
+            b-1.vi-starfox-application.xporrh.c6.kafka.eu-west-1.amazonaws.com:9094,b-2.vi-starfox-application.xporrh.c6.kafka.eu-west-1.amazonaws.com:9094
+        </Property>
+        <Property name="zelda-kafkaBootstrapServers">
+            b-1.vi-zelda-applications.unh3xq.c6.kafka.eu-west-1.amazonaws.com:9094,b-2.vi-zelda-applications.unh3xq.c6.kafka.eu-west-1.amazonaws.com:9094
+        </Property>
+        <Property name="rc-kafkaBootstrapServers">
+            b-1.vi-rc-applications-01.rp0noq.c22.kafka.us-east-1.amazonaws.com:9094,b-2.vi-rc-applications-01.rp0noq.c22.kafka.us-east-1.amazonaws.com:9094
+        </Property>
+        <Property name="prod-kafkaBootstrapServers">
+            b-2.vi-prod-applications.kz3yo6.c22.kafka.us-east-1.amazonaws.com:9094,b-3.vi-prod-applications.kz3yo6.c22.kafka.us-east-1.amazonaws.com:9094,b-1.vi-prod-applications.kz3yo6.c22.kafka.us-east-1.amazonaws.com:9094
+        </Property>
+    </Properties>
+
+    <Appenders>
+        <Console name="Console" target="SYSTEM_OUT">
+            <PatternLayout pattern="${defaultPatternLayout}"/>
+        </Console>
+        <RollingRandomAccessFile name="RollingRandomAccessFile" fileName="${env:LOG_DIR:-/tmp}/${env:SERVICE_NAME}.log"
+                                 append="false" filePattern="${env:LOG_DIR:-/tmp}/${env:SERVICE_NAME}.log.%i">
+        <PatternLayout pattern="${defaultPatternLayout}"/>
+            <Policies>
+                <SizeBasedTriggeringPolicy size="100 MB"/>
+            </Policies>
+            <DefaultRolloverStrategy max="20"/>
+        </RollingRandomAccessFile>
+        <!-- The timezone of the clickstream file is intentional; any changes must be coordinated
+        with both the Ops and Warehouse teams. -->
+        <!-- keep both for now until the full k8s transition -->
+        <RollingFile name="Lookback" fileName="${env:LOG_DIR:-/tmp}/clickstream/clickstream.${env:HOST_HOSTNAME}.log"
+                     filePattern="${env:LOG_DIR:-/tmp}/clickstream/clickstream.${env:HOST_HOSTNAME}.log.%d{yyyy-MM-dd-HH}{America/New_York}">
+            <PatternLayout pattern="%m%n"/>
+            <Policies>
+                <TimeBasedTriggeringPolicy interval="1" modulate="true"/>
+            </Policies>
+        </RollingFile>
+        <!-- clickstream for BigQuery -->
+        <Routing name="Lookback-kafka">
+            <Routes>
+                <Script name="Lookback-kafka-init" language="groovy">
+                    <![CDATA[
+                        if (System.getProperty("VIATOR_ENVIRONMENT", '').equalsIgnoreCase('prod') || System.getProperty("viator_environment", '').equalsIgnoreCase('prod')) {
+                            return "prod"
+                        }
+                        else if (System.getProperty("VIATOR_ENVIRONMENT", '').equalsIgnoreCase('rc') || System.getProperty("viator_environment", '').equalsIgnoreCase('rc')) {
+                            return "rc"
+                        }
+                        else if (System.getProperty("VIATOR_ENVIRONMENT", '').equalsIgnoreCase('int') || System.getProperty("viator_environment", '').equalsIgnoreCase('int')) {
+                            return "int"
+                        }
+                        else if (System.getProperty("VIATOR_ENVIRONMENT", '').equalsIgnoreCase('ninjas') || System.getProperty("viator_environment", '').equalsIgnoreCase('ninjas')) {
+                            return "ninjas"
+                        }
+                        else if (System.getProperty("VIATOR_ENVIRONMENT", '').equalsIgnoreCase('zelda') || System.getProperty("viator_environment", '').equalsIgnoreCase('zelda')) {
+                            return "zelda"
+                        }
+                        else if (System.getProperty("VIATOR_ENVIRONMENT", '').equalsIgnoreCase('starfox') || System.getProperty("viator_environment", '').equalsIgnoreCase('starfox')) {
+                            return "starfox"
+                        }
+                        else {
+                            return "null-lookback"
+                        }
+                    ]]>
+                </Script>
+                <Route key="prod">
+                    <Kafka name="Lookback-kafka" topic="prod.clickstream.${env:SERVICE_NAME}.xml" syncSend="false">
+                        <PatternLayout pattern="%m%n"/>
+                        <Property name="bootstrap.servers">${prod-kafkaBootstrapServers}</Property>
+                        <Property name="security.protocol">SSL</Property>
+                        <Property name="compression.type">zstd</Property>
+                        <Property name="enable.idempotence">true</Property>
+                    </Kafka>
+                </Route>
+                <Route key="rc">
+                    <Kafka name="Lookback-kafka" topic="rc.clickstream.${env:SERVICE_NAME}.xml" syncSend="false">
+                        <PatternLayout pattern="%m%n"/>
+                        <Property name="bootstrap.servers">${rc-kafkaBootstrapServers}</Property>
+                        <Property name="security.protocol">SSL</Property>
+                        <Property name="compression.type">zstd</Property>
+                        <Property name="enable.idempotence">true</Property>
+                    </Kafka>
+                </Route>
+                <Route key="int">
+                    <Kafka name="Lookback-kafka" topic="int.clickstream.${env:SERVICE_NAME}.xml" syncSend="false">
+                        <PatternLayout pattern="%m%n"/>
+                        <Property name="bootstrap.servers">${int-kafkaBootstrapServers}</Property>
+                        <Property name="security.protocol">SSL</Property>
+                        <Property name="compression.type">zstd</Property>
+                        <Property name="enable.idempotence">true</Property>
+                    </Kafka>
+                </Route>
+                <Route key="ninjas">
+                    <Kafka name="Lookback-kafka" topic="ninjas.clickstream.${env:SERVICE_NAME}.xml" syncSend="false">
+                        <PatternLayout pattern="%m%n"/>
+                        <Property name="bootstrap.servers">${ninjas-kafkaBootstrapServers}</Property>
+                        <Property name="security.protocol">SSL</Property>
+                        <Property name="compression.type">zstd</Property>
+                        <Property name="enable.idempotence">true</Property>
+                    </Kafka>
+                </Route>
+                <Route key="zelda">
+                    <Kafka name="Lookback-kafka" topic="zelda.clickstream.${env:SERVICE_NAME}.xml" syncSend="false">
+                        <PatternLayout pattern="%m%n"/>
+                        <Property name="bootstrap.servers">${zelda-kafkaBootstrapServers}</Property>
+                        <Property name="security.protocol">SSL</Property>
+                        <Property name="compression.type">zstd</Property>
+                        <Property name="enable.idempotence">true</Property>
+                    </Kafka>
+                </Route>
+                <Route key="starfox">
+                    <Kafka name="Lookback-kafka" topic="starfox.clickstream.${env:SERVICE_NAME}.xml" syncSend="false">
+                        <PatternLayout pattern="%m%n"/>
+                        <Property name="bootstrap.servers">${starfox-kafkaBootstrapServers}</Property>
+                        <Property name="security.protocol">SSL</Property>
+                        <Property name="compression.type">zstd</Property>
+                        <Property name="enable.idempotence">true</Property>
+                    </Kafka>
+                </Route>
+                <Route key="null-lookback">
+                    <Null name="Lookback-kafka"/>
+                </Route>
+            </Routes>
+        </Routing>
+        <!-- clickstream for Kibana -->
+        <Routing name="KafkaLogstash">
+            <Routes>
+                <Script name="KafkaLogstashInit" language="groovy">
+                    <![CDATA[
+                        (System.getProperty("VIATOR_ENVIRONMENT", '').equalsIgnoreCase('prod')
+                        || System.getProperty("viator_environment", '').equalsIgnoreCase('prod'))
+                        ? 'prod' : 'dev';
+                    ]]>
+                </Script>
+                <!-- repeating twice as there's no easy way to conditionally change the topic name
+                as script can't be used for kafka appender or in global properties -->
+                <Route key="prod">
+                    <Kafka name="kafka-logstash" topic="logstash">
+                        <JsonLayout properties="true" compact="true" eventEol="true">
+                            <KeyValuePair key="environment" value="$${env:VIATOR_ENVIRONMENT}"/>
+                            <KeyValuePair key="role" value="$${env:VIATOR_ROLE}"/>
+                            <KeyValuePair key="kubernetes_namespace" value="$${env:MY_POD_NAMESPACE:-}"/>
+                            <KeyValuePair key="cluster" value="$${env:KUBERNETES_CLUSTER:-}"/>
+                            <KeyValuePair key="kubernetes_host" value="$${env:MY_NODE_NAME:-}"/>
+                            <KeyValuePair key="hostname" value="$${env:MY_POD_NAME:-}"/>
+                            <KeyValuePair key="log_type" value="clickstream"/>
+                        </JsonLayout>
+                        <Property name="bootstrap.servers">${logging-kafkaBootstrapServers}</Property>
+                        <Property name="security.protocol">SSL</Property>
+                        <Property name="compression.type">zstd</Property>
+                    </Kafka>
+                </Route>
+                <Route key="dev">
+                    <Kafka name="kafka-logstash" topic="dev-logstash">
+                        <JsonLayout properties="true" compact="true" eventEol="true">
+                            <KeyValuePair key="environment" value="$${env:VIATOR_ENVIRONMENT}"/>
+                            <KeyValuePair key="role" value="$${env:VIATOR_ROLE}"/>
+                            <KeyValuePair key="kubernetes_namespace" value="$${env:MY_POD_NAMESPACE:-}"/>
+                            <KeyValuePair key="cluster" value="$${env:KUBERNETES_CLUSTER:-}"/>
+                            <KeyValuePair key="kubernetes_host" value="$${env:MY_NODE_NAME:-}"/>
+                            <KeyValuePair key="hostname" value="$${env:MY_POD_NAME:-}"/>
+                            <KeyValuePair key="log_type" value="clickstream"/>
+                        </JsonLayout>
+                        <Property name="bootstrap.servers">${logging-kafkaBootstrapServers}</Property>
+                        <Property name="security.protocol">SSL</Property>
+                        <Property name="compression.type">zstd</Property>
+                    </Kafka>
+                </Route>
+            </Routes>
+        </Routing>
+    </Appenders>
+    <Loggers>
+        <Root level="${env:LOG_LEVEL:-info}">
+            <AppenderRef ref="RollingRandomAccessFile"/>
+        </Root>
+        <logger name="LOOKBACK" level="info" additivity="false">
+            <AppenderRef ref="Lookback"/>
+            <AppenderRef ref="Lookback-kafka"/>
+            <AppenderRef ref="KafkaLogstash"/>
+        </logger>
+        <logger name="org.apache.kafka" level="warn" additivity="false" />
+    </Loggers>
+</Configuration>
